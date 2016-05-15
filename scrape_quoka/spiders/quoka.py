@@ -2,6 +2,8 @@
 
 import scrapy
 import re
+import json
+import urllib
 
 from datetime import datetime
 from ..items import ScrapeQuokaItem
@@ -188,3 +190,37 @@ class QuokaAllSpider(QuokaSpider):
         url = url[:-12] + '.html'
 
         return scrapy.Request(response.urljoin(url), self.parse_city)
+
+
+class QuokaAllPartnerSpider(QuokaAllSpider):
+    name = 'quokaallpartnerspider'
+
+    def parse_line(self, response):
+        for url in response.xpath(
+                '//div[@id="ResultListData"]//li[contains(@class, "hlisting")]'
+                '/div[contains(@class, "image")]/a/@href').extract():
+            yield scrapy.Request(response.urljoin(url), self.parse_obj)
+
+        m = re.search('xmlSearch.php\',\n{(.*)},', response.body_as_unicode())
+        if m:
+            params = u'{' + m.group(1) + u'}'
+            params = json.loads(params)
+            params = urllib.urlencode(params.items())
+
+            url = '/qs/qpc/xmlSearch.php?' + params
+            yield scrapy.Request(response.urljoin(url), self.parse_partner)
+
+    def parse_partner(self, response):
+        now = datetime.utcnow()
+        jsonresponse = json.loads(response.body_as_unicode())
+
+        if 'result' in jsonresponse:
+            for item_obj in jsonresponse['result']:
+                item = init_item(now, item_obj['urlClick'])
+                item['Anbieter_ID'] = u"Immobilienscout24"
+                item['Uberschrift'] = item_obj['title']
+                item['Beschreibung'] = item_obj['description']
+                item['Kaufpreis'] = int(float(item_obj['priceTotal']))
+                yield item
+
+        yield None
