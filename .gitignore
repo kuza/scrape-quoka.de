@@ -1,3 +1,4 @@
+*.sqlite
 test_files/
 *.pyc
 *sublime*
