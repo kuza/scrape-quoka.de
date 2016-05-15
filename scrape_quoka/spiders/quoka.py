@@ -4,6 +4,7 @@ import scrapy
 import re
 
 from datetime import datetime
+from ..items import ScrapeQuokaItem
 
 
 TAG_RE = re.compile(r'<[^>]+>')
@@ -23,6 +24,39 @@ def str_to_int(value):
     return 0
 
 
+def init_item(now, url):
+    return ScrapeQuokaItem(
+        Boersen_ID=21,
+        OBID=0,  # parse
+        erzeugt_am=date_to_int(now),  # crape date
+        Anbieter_ID='',  # Immobilienscout24 for partner
+        Anbieter_ObjektID='',
+        Immobilientyp=u"Büros, Gewerbeflächen",
+        Immobilientyp_detail='',
+        Vermarktungstyp=u"kaufen",
+        Land=u"Deutschland",
+        Bundesland='',
+        Bezirk='',
+        Stadt='',  # parse
+        PLZ='',  # parse
+        Strasse='',
+        Hausnummer='',
+        Uberschrift='',  # parse
+        Beschreibung='',  # parse
+        Etage=0,
+        Kaufpreis=0,  # parse
+        Kaltmiete=0,
+        Warmmiete=0,
+        Nebenkosten=0,
+        Zimmeranzahl=0,
+        Wohnflaeche=0,
+        Monat=now.month,  # curent month
+        url=url,  # detail url
+        Telefon='',  # parse
+        Erstellungsdatum=0,  # parse
+        Gewerblich=0)  # parse
+
+
 class QuokaSpider(scrapy.Spider):
     name = 'quokaspider'
     start_urls = ['http://www.quoka.de/immobilien/bueros-gewerbeflaechen/']
@@ -37,7 +71,7 @@ class QuokaSpider(scrapy.Spider):
     def parse_city(self, response):
         try:
             pages = int(
-                response.selector.xpath(
+                response.xpath(
                     '//div[contains(@class, "page-navigation-bottom")]'
                     '//strong[contains(text(), "Seite 1")]/ancestor::*[1]'
                     '/strong/text()').re_first('^\d+$'))
@@ -77,36 +111,7 @@ class QuokaSpider(scrapy.Spider):
 
     def parse_obj(self, response):
         now = datetime.utcnow()
-        data = dict(
-            Boersen_ID=21,
-            OBID=0,  # parse
-            erzeugt_am=date_to_int(now),  # crape date
-            Anbieter_ID=None,  # Immobilienscout24 for partner
-            Anbieter_ObjektID=None,
-            Immobilientyp=u"Büros, Gewerbeflächen",
-            Immobilientyp_detail=None,
-            Vermarktungstyp=u"kaufen",
-            Land=u"Deutschland",
-            Bundesland=None,
-            Bezirk=None,
-            Stadt='',  # parse
-            PLZ='',  # parse
-            Strasse=None,
-            Hausnummer=None,
-            Uberschrift='',  # parse
-            Beschreibung='',  # parse
-            Etage=None,
-            Kaufpreis=0,  # parse
-            Kaltmiete=None,
-            Warmmiete=None,
-            Nebenkosten=None,
-            Zimmeranzahl=None,
-            Wohnflaeche=None,
-            Monat=now.month,  # curent month
-            url=response.url,  # detail url
-            Telefon=0,  # parse
-            Erstellungsdatum=0,  # parse
-            Gewerblich=0)  # parse
+        item = init_item(now, response.url)
 
         obid = response.xpath(
             '//div[@class="date-and-clicks"]/strong/text()').re_first('\d+')
@@ -126,17 +131,6 @@ class QuokaSpider(scrapy.Spider):
         if kaufpreis:
             kaufpreis = ''.join(re.findall('(\d+)[,.]', kaufpreis))
 
-        telefon_url = response.xpath(
-            '//a[contains(@onclick,"displayphonenumber.php")]'
-            '/@onclick').extract_first()
-        if telefon_url:
-            m = re.search('load\( \'(.+?)\'', telefon_url)
-            if m:
-                url = m.group(1)
-                request = scrapy.Request(
-                    response.urljoin(url), self.parse_phone)
-                request.meta['item'] = data
-
         erstellungsdatum = response.xpath(
             '//div[contains(text(), "Datum:")]'
             '/following-sibling::*').extract_first()
@@ -150,17 +144,28 @@ class QuokaSpider(scrapy.Spider):
         gewerblich = bool(response.xpath(
             '//div[@class="cust-type"]/text()').re_first('Gewerblicher'))
 
-        data.update(
-            OBID=str_to_int(obid),
-            Stadt=stadt,
-            PLZ=plz,
-            Uberschrift=uberschrift,
-            Beschreibung=clean_str(beschreibung),
-            Kaufpreis=str_to_int(kaufpreis),
-            Erstellungsdatum=str_to_int(erstellungsdatum),
-            Gewerblich=int(gewerblich))
+        item['OBID'] = str_to_int(obid)
+        item['Stadt'] = stadt
+        item['PLZ'] = plz
+        item['Uberschrift'] = uberschrift
+        item['Beschreibung'] = clean_str(beschreibung)
+        item['Kaufpreis'] = str_to_int(kaufpreis)
+        item['Erstellungsdatum'] = str_to_int(erstellungsdatum)
+        item['Gewerblich'] = int(gewerblich)
 
-        yield data
+        telefon_url = response.xpath(
+            '//a[contains(@onclick,"displayphonenumber.php")]'
+            '/@onclick').extract_first()
+        if telefon_url:
+            m = re.search('load\( \'(.+?)\'', telefon_url)
+            if m:
+                url = m.group(1)
+                request = scrapy.Request(
+                    response.urljoin(url), self.parse_phone)
+                request.meta['item'] = item
+                yield request
+
+        yield item
 
     def parse_phone(self, response):
         item = response.meta['item']
@@ -168,6 +173,18 @@ class QuokaSpider(scrapy.Spider):
         telefon = response.xpath('//span/text()').extract_first()
         telefon = ''.join(re.findall('\d+', telefon))
 
-        item['Telefon'] = str_to_int(telefon)
+        item['Telefon'] = telefon
 
         return item
+
+
+class QuokaAllSpider(QuokaSpider):
+    name = 'quokaallspider'
+
+    def parse(self, response):
+        url = response.xpath(
+            '//div[contains(@class, "page-navigation-bottom")]'
+            '//a[@data-qng-page="2"]/@href').extract_first()
+        url = url[:-12] + '.html'
+
+        return scrapy.Request(response.urljoin(url), self.parse_city)
